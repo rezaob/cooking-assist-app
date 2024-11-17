@@ -9,6 +9,7 @@ export class SpeechRecognitionService {
     private speechRecognizer: SFSpeechRecognizer;
     private lastPartialResult: string = '';
     private noSpeechTimer: any;
+    private inputNode: AVAudioInputNode;
 
     constructor() {
         if (isIOS) {
@@ -21,6 +22,7 @@ export class SpeechRecognitionService {
             this.audioEngine = AVAudioEngine.new();
             this.audioSession = AVAudioSession.sharedInstance();
             this.speechRecognizer = SFSpeechRecognizer.alloc().initWithLocale(NSLocale.alloc().initWithLocaleIdentifier('en-US'));
+            this.inputNode = this.audioEngine.inputNode;
             
             if (!this.speechRecognizer.available) {
                 throw new Error('Speech recognition not available');
@@ -34,22 +36,25 @@ export class SpeechRecognitionService {
         if (!isIOS) return false;
 
         try {
-            // Deactivate session first
-            this.audioSession.setActiveWithOptionsError(false, AVAudioSessionSetActiveOptions.NotifyOthersOnDeactivation);
-
-            // Configure category and mode
+            // Reset audio session
+            this.audioSession.setActiveWithOptionsError(false, 0);
+            
+            // Configure audio session
+            this.audioSession.setModeError(AVAudioSessionModeMeasurement);
             this.audioSession.setCategoryWithOptionsError(
                 AVAudioSessionCategoryPlayAndRecord,
                 AVAudioSessionCategoryOptions.DefaultToSpeaker |
-                AVAudioSessionCategoryOptions.AllowBluetooth
+                AVAudioSessionCategoryOptions.AllowBluetooth |
+                AVAudioSessionCategoryOptions.MixWithOthers
             );
-
-            // Set mode
-            this.audioSession.setModeError(AVAudioSessionModeMeasurement);
-
-            // Activate session
+            
+            // Set preferred sample rate and I/O buffer duration
+            this.audioSession.setPreferredSampleRateError(44100);
+            this.audioSession.setPreferredIOBufferDurationError(0.005);
+            
+            // Activate the session
             this.audioSession.setActiveWithOptionsError(true, 0);
-
+            
             return true;
         } catch (err) {
             console.error('Audio session configuration error:', err);
@@ -58,7 +63,9 @@ export class SpeechRecognitionService {
     }
 
     async startListening(): Promise<string> {
-        if (this.isListening) return;
+        if (this.isListening) {
+            return;
+        }
 
         try {
             const hasPermission = await this.requestPermissions();
@@ -89,35 +96,44 @@ export class SpeechRecognitionService {
     private async startIOSSpeechRecognition(): Promise<string> {
         return new Promise((resolve, reject) => {
             try {
-                // Create recognition request
+                // Stop any existing tasks
+                this.stopRecording();
+                
+                // Create and configure recognition request
                 this.recognitionRequest = SFSpeechAudioBufferRecognitionRequest.new();
                 this.recognitionRequest.shouldReportPartialResults = true;
 
-                // Configure audio engine
-                const inputNode = this.audioEngine.inputNode;
-                const recordingFormat = inputNode.outputFormatForBus(0);
+                // Configure audio engine and input node
+                const recordingFormat = this.inputNode.outputFormatForBus(0);
                 
-                inputNode.installTapOnBusBufferSizeFormatBlock(
+                // Remove any existing tap before installing a new one
+                this.inputNode.removeTapOnBus(0);
+                
+                this.inputNode.installTapOnBusBufferSizeFormatBlock(
                     0,
-                    4096,
+                    1024,
                     recordingFormat,
                     (buffer: AVAudioPCMBuffer, when: AVAudioTime) => {
                         this.recognitionRequest?.appendAudioPCMBuffer(buffer);
                     }
                 );
 
+                // Prepare and start audio engine
                 this.audioEngine.prepare();
 
                 // Start recognition task
                 this.recognitionTask = this.speechRecognizer.recognitionTaskWithRequestResultHandler(
                     this.recognitionRequest,
                     (result: SFSpeechRecognitionResult, error: NSError) => {
+                        let isFinal = false;
+
                         if (result) {
                             const transcript = result.bestTranscription.formattedString;
                             console.log('Speech result:', transcript);
                             this.lastPartialResult = transcript;
+                            isFinal = result.isFinal;
                             
-                            if (result.isFinal) {
+                            if (isFinal) {
                                 this.stopRecording();
                                 resolve(transcript);
                             }
@@ -131,10 +147,11 @@ export class SpeechRecognitionService {
                     }
                 );
 
+                // Start audio engine
                 const startError = new interop.Reference();
-                const success = this.audioEngine.startAndReturnError(startError);
+                this.audioEngine.startAndReturnError(startError);
                 
-                if (!success) {
+                if (startError.value) {
                     throw new Error('Failed to start audio engine');
                 }
 
@@ -160,7 +177,7 @@ export class SpeechRecognitionService {
         if (this.noSpeechTimer) {
             clearTimeout(this.noSpeechTimer);
         }
-        this.noSpeechTimer = setTimeout(callback, 3000);
+        this.noSpeechTimer = setTimeout(callback, 5000); // Increased timeout to 5 seconds
     }
 
     private async startAndroidSpeechRecognition(): Promise<string> {
@@ -214,8 +231,9 @@ export class SpeechRecognitionService {
         if (isIOS) {
             if (this.audioEngine?.running) {
                 this.audioEngine.stop();
-                this.audioEngine.inputNode?.removeTapOnBus(0);
-                this.audioEngine.reset();
+                if (this.inputNode) {
+                    this.inputNode.removeTapOnBus(0);
+                }
             }
             
             this.recognitionRequest?.endAudio();
