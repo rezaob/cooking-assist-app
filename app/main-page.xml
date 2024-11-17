@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<Page xmlns="http://schemas.nativescript.org/tns.xsd" 
+      navigatingTo="navigatingTo"
+      class="page">
+    <ActionBar title="Recipe Assistant" class="action-bar" />
+    
+    <GridLayout rows="auto, auto, *">
+        <Button row="0"
+                text="{{ buttonText }}"
+                tap="{{ startConversation }}"
+                class="{{ isListening ? 'btn-listening' : 'btn' }}" />
+        
+        <ActivityIndicator row="1"
+                          busy="{{ isLoading }}" 
+                          class="activity-indicator" />
+        
+        <ScrollView row="2">
+            <StackLayout class="container">
+                <Label text="{{ statusMessage }}" 
+                       class="text-label" 
+                       textWrap="true" />
+                       
+                <Label text="{{ recipeDetails }}"
+                       class="recipe-details"
+                       textWrap="true"
+                       visibility="{{ recipeDetails ? 'visible' : 'collapsed' }}" />
+            </StackLayout>
+        </ScrollView>
+    </GridLayout>
+</Page>
