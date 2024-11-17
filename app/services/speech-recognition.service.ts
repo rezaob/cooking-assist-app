@@ -1,4 +1,4 @@
-import { Http, File, knownFolders, isAndroid, isIOS, Application } from '@nativescript/core';
+import { Http, File, knownFolders, isAndroid, isIOS } from '@nativescript/core';
 
 export class SpeechRecognitionService {
     private isListening: boolean = false;
@@ -32,29 +32,22 @@ export class SpeechRecognitionService {
         }
     }
 
-    private configureAudioSession(): boolean {
+    private async configureAudioSession(): Promise<boolean> {
         if (!isIOS) return false;
 
         try {
-            // Reset audio session
-            this.audioSession.setActiveWithOptionsError(false, 0);
-            
-            // Configure audio session
-            this.audioSession.setModeError(AVAudioSessionModeMeasurement);
-            this.audioSession.setCategoryWithOptionsError(
-                AVAudioSessionCategoryPlayAndRecord,
-                AVAudioSessionCategoryOptions.DefaultToSpeaker |
-                AVAudioSessionCategoryOptions.AllowBluetooth |
-                AVAudioSessionCategoryOptions.MixWithOthers
-            );
-            
-            // Set preferred sample rate and I/O buffer duration
-            this.audioSession.setPreferredSampleRateError(44100);
-            this.audioSession.setPreferredIOBufferDurationError(0.005);
-            
-            // Activate the session
-            this.audioSession.setActiveWithOptionsError(true, 0);
-            
+            // Deactivate any existing session
+            try {
+                await this.audioSession.setActiveError(false);
+            } catch (err) {
+                console.log('Session was already inactive');
+            }
+
+            // Configure session for recording
+            await this.audioSession.setCategoryError(AVAudioSessionCategoryRecord);
+            await this.audioSession.setModeError(AVAudioSessionModeMeasurement);
+            await this.audioSession.setActiveError(true);
+
             return true;
         } catch (err) {
             console.error('Audio session configuration error:', err);
@@ -77,7 +70,7 @@ export class SpeechRecognitionService {
             console.log('Starting to listen...');
 
             if (isIOS) {
-                if (!this.configureAudioSession()) {
+                if (!await this.configureAudioSession()) {
                     throw new Error('Failed to configure audio session');
                 }
                 return await this.startIOSSpeechRecognition();
@@ -96,44 +89,35 @@ export class SpeechRecognitionService {
     private async startIOSSpeechRecognition(): Promise<string> {
         return new Promise((resolve, reject) => {
             try {
-                // Stop any existing tasks
                 this.stopRecording();
                 
-                // Create and configure recognition request
                 this.recognitionRequest = SFSpeechAudioBufferRecognitionRequest.new();
                 this.recognitionRequest.shouldReportPartialResults = true;
 
-                // Configure audio engine and input node
-                const recordingFormat = this.inputNode.outputFormatForBus(0);
+                // Get the native format from the input node
+                const inputFormat = this.inputNode.inputFormatForBus(0);
                 
-                // Remove any existing tap before installing a new one
                 this.inputNode.removeTapOnBus(0);
-                
                 this.inputNode.installTapOnBusBufferSizeFormatBlock(
                     0,
-                    1024,
-                    recordingFormat,
+                    4096,
+                    inputFormat,
                     (buffer: AVAudioPCMBuffer, when: AVAudioTime) => {
                         this.recognitionRequest?.appendAudioPCMBuffer(buffer);
                     }
                 );
 
-                // Prepare and start audio engine
                 this.audioEngine.prepare();
 
-                // Start recognition task
                 this.recognitionTask = this.speechRecognizer.recognitionTaskWithRequestResultHandler(
                     this.recognitionRequest,
                     (result: SFSpeechRecognitionResult, error: NSError) => {
-                        let isFinal = false;
-
                         if (result) {
                             const transcript = result.bestTranscription.formattedString;
                             console.log('Speech result:', transcript);
                             this.lastPartialResult = transcript;
-                            isFinal = result.isFinal;
                             
-                            if (isFinal) {
+                            if (result.isFinal) {
                                 this.stopRecording();
                                 resolve(transcript);
                             }
@@ -147,15 +131,11 @@ export class SpeechRecognitionService {
                     }
                 );
 
-                // Start audio engine
-                const startError = new interop.Reference();
-                this.audioEngine.startAndReturnError(startError);
-                
-                if (startError.value) {
+                const started = this.audioEngine.startAndReturnError(null);
+                if (!started) {
                     throw new Error('Failed to start audio engine');
                 }
 
-                // Set timeout for no speech
                 this.resetNoSpeechTimer(() => {
                     if (this.lastPartialResult) {
                         this.stopRecording();
@@ -177,7 +157,7 @@ export class SpeechRecognitionService {
         if (this.noSpeechTimer) {
             clearTimeout(this.noSpeechTimer);
         }
-        this.noSpeechTimer = setTimeout(callback, 5000); // Increased timeout to 5 seconds
+        this.noSpeechTimer = setTimeout(callback, 5000);
     }
 
     private async startAndroidSpeechRecognition(): Promise<string> {
@@ -220,7 +200,7 @@ export class SpeechRecognitionService {
         return true;
     }
 
-    private stopRecording(): void {
+    private async stopRecording(): Promise<void> {
         this.isListening = false;
         
         if (this.noSpeechTimer) {
@@ -243,10 +223,7 @@ export class SpeechRecognitionService {
             this.recognitionTask = null;
 
             try {
-                this.audioSession?.setActiveWithOptionsError(
-                    false,
-                    AVAudioSessionSetActiveOptions.NotifyOthersOnDeactivation
-                );
+                await this.audioSession?.setActiveError(false);
             } catch (error) {
                 console.error('Error deactivating audio session:', error);
             }

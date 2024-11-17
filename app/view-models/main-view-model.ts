@@ -46,7 +46,8 @@ export class MainViewModel extends Observable {
             this.set('buttonText', 'Listening...');
             this.set('statusMessage', 'I\'m listening... What recipe would you like to know about?');
             
-            // Start listening immediately
+            await this.voiceService.speak('What recipe would you like to know about?');
+            
             const transcription = await this.speechRecognitionService.startListening();
             
             if (transcription && transcription.length > 0) {
@@ -76,7 +77,7 @@ export class MainViewModel extends Observable {
                     await this.voiceService.speak(instruction);
                 }
                 
-                this.retryCount = 0; // Reset retry count on success
+                this.retryCount = 0;
                 await this.voiceService.speak('Would you like to try another recipe? Just tap the button again!');
             } else {
                 throw new Error('No speech detected');
